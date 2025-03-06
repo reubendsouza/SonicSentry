@@ -1,23 +1,60 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import axios from "axios";
 import Editor from "@monaco-editor/react";
-import { AlertTriangle, CheckCircle, Code2, AlertCircle } from "lucide-react";
+import { AlertTriangle, CheckCircle, Code2, AlertCircle, File } from "lucide-react";
 
 interface ContractAuditViewProps {
   initialCode?: string;
   title: string;
   description?: string;
-  onAnalysisComplete?: (results: any) => void;
+  initialResults?: {
+    vulnerabilities: { type: string; description: string; severity: string; line: number }[];
+    riskScore: number;
+  } | null;
 }
 
-function ContractAuditView({ initialCode = "", title, description, onAnalysisComplete }: ContractAuditViewProps) {
+function ContractAuditView({ initialCode = "", title, description, initialResults = null }: ContractAuditViewProps) {
   const [code, setCode] = useState(initialCode);
   const [results, setResults] = useState<{
     vulnerabilities: { type: string; description: string; severity: string; line: number }[];
     riskScore: number;
-  } | null>(null);
+  } | null>(initialResults);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
+  const [parsedFiles, setParsedFiles] = useState<{name: string, content: string}[]>([]);
+  const [selectedFileIndex, setSelectedFileIndex] = useState(0);
+
+  useEffect(() => {
+    // Try to parse the code as JSON to check if it contains multiple files
+    try {
+      const parsedCode = JSON.parse(initialCode);
+      if (parsedCode.sources && typeof parsedCode.sources === 'object') {
+        // Extract files from the sources object
+        const files = Object.entries(parsedCode.sources).map(([path, fileObj]: [string, any]) => {
+          // Handle both formats: when fileObj has content property or when it is the content itself
+          const content = fileObj.content || 
+                         (typeof fileObj === 'string' ? fileObj : JSON.stringify(fileObj, null, 2));
+          return {
+            name: path,
+            content: content
+          };
+        });
+        
+        if (files.length > 0) {
+          setParsedFiles(files);
+          setCode(files[0].content);
+          return;
+        }
+      }
+    } catch (e) {
+      // Not JSON or doesn't have the expected structure, use as a single file
+      console.log("Failed to parse as JSON with sources:", e);
+    }
+    
+    // If we couldn't parse multiple files, treat as a single file
+    setParsedFiles([{ name: "Contract.sol", content: initialCode }]);
+    setCode(initialCode);
+  }, [initialCode]);
 
   const handleSubmit = async () => {
     if (!code.trim()) {
@@ -30,10 +67,8 @@ function ContractAuditView({ initialCode = "", title, description, onAnalysisCom
 
     try {
       const response = await axios.post("http://localhost:3000/audit", { code });
+      console.log(response.data);
       setResults(response.data.result);
-      if (onAnalysisComplete) {
-        onAnalysisComplete(response.data.result);
-      }
     } catch (err) {
       setError("Failed to analyze the code. Please try again.");
       console.error(err);
@@ -103,12 +138,48 @@ function ContractAuditView({ initialCode = "", title, description, onAnalysisCom
               )}
             </button>
           </div>
+
+          {/* File tabs for multiple files */}
+          {parsedFiles.length > 1 && (
+            <div className="flex overflow-x-auto border-b border-gray-200 mb-2">
+              {parsedFiles.map((file, index) => (
+                <button
+                  key={index}
+                  className={`flex items-center px-4 py-2 text-sm font-medium whitespace-nowrap
+                            ${selectedFileIndex === index 
+                              ? 'border-b-2 border-blue-500 text-blue-600' 
+                              : 'text-gray-500 hover:text-gray-700 hover:border-gray-300'}`}
+                  onClick={() => {
+                    setSelectedFileIndex(index);
+                    setCode(parsedFiles[index].content);
+                  }}
+                >
+                  <File className="w-4 h-4 mr-2" />
+                  <span className="truncate max-w-xs">
+                    {file.name.split('/').pop() || file.name}
+                  </span>
+                </button>
+              ))}
+            </div>
+          )}
+
           <div className="h-[calc(100vh-300px)] rounded-lg overflow-hidden border border-gray-200 shadow-sm">
             <Editor
               height="100%"
               defaultLanguage="sol"
               value={code}
-              onChange={(value) => setCode(value || "")}
+              onChange={(value) => {
+                setCode(value || "");
+                // Update the content in parsedFiles array
+                if (parsedFiles.length > 0) {
+                  const updatedFiles = [...parsedFiles];
+                  updatedFiles[selectedFileIndex] = {
+                    ...updatedFiles[selectedFileIndex],
+                    content: value || ""
+                  };
+                  setParsedFiles(updatedFiles);
+                }
+              }}
               theme="vs-dark"
               options={{
                 minimap: { enabled: false },
@@ -123,6 +194,12 @@ function ContractAuditView({ initialCode = "", title, description, onAnalysisCom
               }}
             />
           </div>
+          
+          {parsedFiles.length > 1 && (
+            <div className="text-sm text-gray-500">
+              File {selectedFileIndex + 1} of {parsedFiles.length}: {parsedFiles[selectedFileIndex].name}
+            </div>
+          )}
         </div>
 
         {/* Results Section */}
@@ -141,7 +218,7 @@ function ContractAuditView({ initialCode = "", title, description, onAnalysisCom
                   <span className={`text-4xl font-bold ${getRiskScoreColor(results.riskScore)}`}>
                     {results.riskScore}
                   </span>
-                  <span className="text-gray-500 ml-2">/10</span>
+                  <span className="text-gray-500 ml-2">/100</span>
                 </div>
               </div>
 
